@@ -69,6 +69,7 @@ from ..sql.cache_key import HasCacheKey
 from ..sql.operators import ColumnOperators
 from ..sql.schema import Column
 from ..sql.type_api import TypeEngine
+from ..util import warn_deprecated
 from ..util.typing import RODescriptorReference
 from ..util.typing import TypedDict
 
@@ -200,7 +201,7 @@ class _AttributeOptions(NamedTuple):
     dataclasses_compare: Union[_NoArg, bool]
     dataclasses_kw_only: Union[_NoArg, bool]
 
-    def _as_dataclass_field(self) -> Any:
+    def _as_dataclass_field(self, key: str) -> Any:
         """Return a ``dataclasses.Field`` object given these arguments."""
 
         kw: Dict[str, Any] = {}
@@ -216,6 +217,34 @@ class _AttributeOptions(NamedTuple):
             kw["compare"] = self.dataclasses_compare
         if self.dataclasses_kw_only is not _NoArg.NO_ARG:
             kw["kw_only"] = self.dataclasses_kw_only
+
+        if "default" in kw and callable(kw["default"]):
+            # callable defaults are ambiguous. deprecate them in favour of
+            # insert_default or default_factory. #9936
+            warn_deprecated(
+                f"Callable object passed to the ``default`` parameter for "
+                f"attribute {key!r} in a ORM-mapped Dataclasses context is "
+                "ambiguous, "
+                "and this use will raise an error in a future release.  "
+                "If this callable is intended to produce Core level INSERT "
+                "default values for an underlying ``Column``, use "
+                "the ``mapped_column.insert_default`` parameter instead.  "
+                "To establish this callable as providing a default value "
+                "for instances of the dataclass itself, use the "
+                "``default_factory`` dataclasses parameter.",
+                "2.0",
+            )
+
+        if (
+            "init" in kw
+            and not kw["init"]
+            and "default" in kw
+            and not callable(kw["default"])  # ignore callable defaults. #9936
+            and "default_factory" not in kw  # illegal but let dc.field raise
+        ):
+            # fix for #9879
+            default = kw.pop("default")
+            kw["default_factory"] = lambda: default
 
         return dataclasses.field(**kw)
 
@@ -236,7 +265,7 @@ class _AttributeOptions(NamedTuple):
 
         """
         if isinstance(elem, _DCAttributeOptions):
-            dc_field = elem._attribute_options._as_dataclass_field()
+            dc_field = elem._attribute_options._as_dataclass_field(key)
 
             return (key, annotation, dc_field)
         elif elem is not _NoArg.NO_ARG:
@@ -262,6 +291,15 @@ class _AttributeOptions(NamedTuple):
 
 _DEFAULT_ATTRIBUTE_OPTIONS = _AttributeOptions(
     _NoArg.NO_ARG,
+    _NoArg.NO_ARG,
+    _NoArg.NO_ARG,
+    _NoArg.NO_ARG,
+    _NoArg.NO_ARG,
+    _NoArg.NO_ARG,
+)
+
+_DEFAULT_READONLY_ATTRIBUTE_OPTIONS = _AttributeOptions(
+    False,
     _NoArg.NO_ARG,
     _NoArg.NO_ARG,
     _NoArg.NO_ARG,
@@ -306,7 +344,7 @@ class _MapsColumns(_DCAttributeOptions, _MappedAttribute[_T]):
         raise NotImplementedError()
 
     @property
-    def columns_to_assign(self) -> List[Column[_T]]:
+    def columns_to_assign(self) -> List[Tuple[Column[_T], int]]:
         """A list of Column objects that should be declaratively added to the
         new Table object.
 
@@ -398,10 +436,6 @@ class MapperProperty(
     :func:`.column_property`, :func:`_orm.relationship`, or :func:`.composite`
     functions.
 
-    .. versionchanged:: 1.0.0 :attr:`.InspectionAttr.info` moved
-        from :class:`.MapperProperty` so that it can apply to a wider
-        variety of ORM and extension constructs.
-
     .. seealso::
 
         :attr:`.QueryableAttribute.info`
@@ -419,11 +453,6 @@ class MapperProperty(
         :func:`.column_property`, :func:`_orm.relationship`, or
         :func:`.composite`
         functions.
-
-        .. versionchanged:: 1.0.0 :attr:`.MapperProperty.info` is also
-           available on extension types via the
-           :attr:`.InspectionAttrInfo.info` attribute, so that it can apply
-           to a wider variety of ORM and extension constructs.
 
         .. seealso::
 
@@ -519,19 +548,24 @@ class MapperProperty(
         """
 
     def __init__(
-        self, attribute_options: Optional[_AttributeOptions] = None
+        self,
+        attribute_options: Optional[_AttributeOptions] = None,
+        _assume_readonly_dc_attributes: bool = False,
     ) -> None:
         self._configure_started = False
         self._configure_finished = False
-        if (
-            attribute_options
-            and attribute_options != _DEFAULT_ATTRIBUTE_OPTIONS
-        ):
+
+        if _assume_readonly_dc_attributes:
+            default_attrs = _DEFAULT_READONLY_ATTRIBUTE_OPTIONS
+        else:
+            default_attrs = _DEFAULT_ATTRIBUTE_OPTIONS
+
+        if attribute_options and attribute_options != default_attrs:
             self._has_dataclass_arguments = True
             self._attribute_options = attribute_options
         else:
             self._has_dataclass_arguments = False
-            self._attribute_options = _DEFAULT_ATTRIBUTE_OPTIONS
+            self._attribute_options = default_attrs
 
     def init(self) -> None:
         """Called after all mappers are created to assemble
@@ -964,7 +998,6 @@ class StrategizedProperty(MapperProperty[_T]):
     def _get_context_loader(
         self, context: ORMCompileState, path: AbstractEntityRegistry
     ) -> Optional[_LoadElement]:
-
         load: Optional[_LoadElement] = None
 
         search_path = path[self]

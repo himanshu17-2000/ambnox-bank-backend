@@ -10,7 +10,7 @@ api = Blueprint(name='api' ,import_name='api')
 
 @api.route('/')
 def home_func():
-    return "home page" 
+    return "Himanshu's home page" 
 
 @api.route('/get_users' , methods=['GET'])
 def get_users():
@@ -94,7 +94,7 @@ def get_customer_by_id(id):
 
 @api.route("/withdraw_deposite" , methods =['POST'])
 def withdraw_deposite():
-      try:
+    try:
         data = request.json 
         user = Users.query.get(data['id'])
         if(data['method'] == 'deposite'):
@@ -107,6 +107,5 @@ def withdraw_deposite():
                     "method" : data['method'] ,
                     "amount" : data["amount"]
                 }) , 200 
-      except Exception as err:
+    except Exception as err:
             return json.dumps( { "message" :f"error occur {err}"}) , 400 
-    

@@ -29,6 +29,7 @@ from .. import util
 from ..pool import _AdhocProxiedConnection
 from ..pool import ConnectionPoolEntry
 from ..sql import compiler
+from ..util import immutabledict
 
 if typing.TYPE_CHECKING:
     from .base import Engine
@@ -63,7 +64,6 @@ def create_engine(
     json_deserializer: Callable[..., Any] = ...,
     json_serializer: Callable[..., Any] = ...,
     label_length: Optional[int] = ...,
-    listeners: Any = ...,
     logging_name: str = ...,
     max_identifier_length: Optional[int] = ...,
     max_overflow: int = ...,
@@ -351,10 +351,6 @@ def create_engine(url: Union[str, _url.URL], **kwargs: Any) -> Engine:
 
             :paramref:`_sa.create_engine.max_identifier_length`
 
-    :param listeners: A list of one or more
-        :class:`~sqlalchemy.interfaces.PoolListener` objects which will
-        receive connection pool events.
-
     :param logging_name:  String identifier which will be used within
         the "name" field of logging records generated within the
         "sqlalchemy.engine" logger. Defaults to a hexstring of the
@@ -637,6 +633,7 @@ def create_engine(url: Union[str, _url.URL], **kwargs: Any) -> Engine:
                     )
                     if connection is not None:
                         return connection
+
             return dialect.connect(*cargs, **cparams)
 
         creator = pop_kwarg("creator", connect)
@@ -648,18 +645,8 @@ def create_engine(url: Union[str, _url.URL], **kwargs: Any) -> Engine:
 
         # consume pool arguments from kwargs, translating a few of
         # the arguments
-        translate = {
-            "logging_name": "pool_logging_name",
-            "echo": "echo_pool",
-            "timeout": "pool_timeout",
-            "recycle": "pool_recycle",
-            "events": "pool_events",
-            "reset_on_return": "pool_reset_on_return",
-            "pre_ping": "pool_pre_ping",
-            "use_lifo": "pool_use_lifo",
-        }
         for k in util.get_cls_kwargs(poolclass):
-            tk = translate.get(k, k)
+            tk = _pool_translate_kwargs.get(k, k)
             if tk in kwargs:
                 pool_args[k] = pop_kwarg(tk)
 
@@ -706,7 +693,6 @@ def create_engine(url: Union[str, _url.URL], **kwargs: Any) -> Engine:
     engine = engineclass(pool, dialect, u, **engine_args)
 
     if _initialize:
-
         do_on_connect = dialect.on_connect_url(u)
         if do_on_connect:
 
@@ -815,3 +801,60 @@ def engine_from_config(
     options.update(kwargs)
     url = options.pop("url")
     return create_engine(url, **options)
+
+
+@overload
+def create_pool_from_url(
+    url: Union[str, URL],
+    *,
+    poolclass: Optional[Type[Pool]] = ...,
+    logging_name: str = ...,
+    pre_ping: bool = ...,
+    size: int = ...,
+    recycle: int = ...,
+    reset_on_return: Optional[_ResetStyleArgType] = ...,
+    timeout: float = ...,
+    use_lifo: bool = ...,
+    **kwargs: Any,
+) -> Pool:
+    ...
+
+
+@overload
+def create_pool_from_url(url: Union[str, URL], **kwargs: Any) -> Pool:
+    ...
+
+
+def create_pool_from_url(url: Union[str, URL], **kwargs: Any) -> Pool:
+    """Create a pool instance from the given url.
+
+    If ``poolclass`` is not provided the pool class used
+    is selected using the dialect specified in the URL.
+
+    The arguments passed to :func:`_sa.create_pool_from_url` are
+    identical to the pool argument passed to the :func:`_sa.create_engine`
+    function.
+
+    .. versionadded:: 2.0.10
+    """
+
+    for key in _pool_translate_kwargs:
+        if key in kwargs:
+            kwargs[_pool_translate_kwargs[key]] = kwargs.pop(key)
+
+    engine = create_engine(url, **kwargs, _initialize=False)
+    return engine.pool
+
+
+_pool_translate_kwargs = immutabledict(
+    {
+        "logging_name": "pool_logging_name",
+        "echo": "echo_pool",
+        "timeout": "pool_timeout",
+        "recycle": "pool_recycle",
+        "events": "pool_events",  # deprecated
+        "reset_on_return": "pool_reset_on_return",
+        "pre_ping": "pool_pre_ping",
+        "use_lifo": "pool_use_lifo",
+    }
+)

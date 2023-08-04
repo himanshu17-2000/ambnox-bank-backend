@@ -9,7 +9,9 @@
 
 from __future__ import annotations
 
+from argparse import Namespace
 import collections
+import inspect
 import typing
 from typing import Any
 from typing import Callable
@@ -33,6 +35,7 @@ test_schema_2 = None
 any_async = False
 _current = None
 ident = "main"
+options: Namespace = None  # type: ignore
 
 if typing.TYPE_CHECKING:
     from .plugin.plugin_base import FixtureFunctions
@@ -119,11 +122,7 @@ def combinations(
 
 
 def combinations_list(
-    arg_iterable: Iterable[
-        Tuple[
-            Any,
-        ]
-    ],
+    arg_iterable: Iterable[Tuple[Any,]],
     **kw,
 ):
     "As combination, but takes a single iterable"
@@ -185,7 +184,7 @@ class Variation:
         return [typ(casename, argname, case_names) for casename in case_names]
 
 
-def variation(argname, cases):
+def variation(argname_or_fn, cases=None):
     """a helper around testing.combinations that provides a single namespace
     that can be used as a switch.
 
@@ -221,6 +220,17 @@ def variation(argname, cases):
 
     """
 
+    if inspect.isfunction(argname_or_fn):
+        argname = argname_or_fn.__name__
+        cases = argname_or_fn(None)
+
+        @variation_fixture(argname, cases)
+        def go(self, request):
+            yield request.param
+
+        return go
+    else:
+        argname = argname_or_fn
     cases_plus_limitations = [
         entry
         if (isinstance(entry, tuple) and len(entry) == 2)

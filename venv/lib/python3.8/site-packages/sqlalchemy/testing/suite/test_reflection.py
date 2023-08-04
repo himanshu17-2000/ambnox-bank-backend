@@ -177,6 +177,15 @@ class HasTableTest(OneConnectionTablesTest):
                 )
             )
 
+    @testing.requires.schemas
+    def test_has_table_nonexistent_schema(self):
+        with config.db.begin() as conn:
+            is_false(
+                config.db.dialect.has_table(
+                    conn, "test_table", schema="nonexistent_schema"
+                )
+            )
+
     @testing.requires.views
     def test_has_table_view(self, connection):
         insp = inspect(connection)
@@ -336,7 +345,6 @@ class QuotedNameArgumentTest(fixtures.TablesTest):
         )
 
         if testing.requires.view_column_reflection.enabled:
-
             if testing.requires.symbol_names_w_double_quote.enabled:
                 names = [
                     "quote ' one",
@@ -555,6 +563,7 @@ class ComponentReflectionTest(ComparesTables, OneConnectionTablesTest):
                 sa.String(20),
                 comment=r"""Comment types type speedily ' " \ '' Fun!""",
             ),
+            Column("d3", sa.String(42), comment="Comment\nwith\rescapes"),
             schema=schema,
             comment=r"""the test % ' " \ table comment""",
         )
@@ -563,6 +572,7 @@ class ComponentReflectionTest(ComparesTables, OneConnectionTablesTest):
             metadata,
             Column("data", sa.String(20)),
             schema=schema,
+            comment="no\nconstraints\rhas\fescaped\vcomment",
         )
 
         if testing.requires.cross_schema_fk_reflection.enabled:
@@ -822,7 +832,9 @@ class ComponentReflectionTest(ComparesTables, OneConnectionTablesTest):
             (schema, "comment_test"): {
                 "text": r"""the test % ' " \ table comment"""
             },
-            (schema, "no_constraints"): empty,
+            (schema, "no_constraints"): {
+                "text": "no\nconstraints\rhas\fescaped\vcomment"
+            },
             (schema, "local_table"): empty,
             (schema, "remote_table"): empty,
             (schema, "remote_table_2"): empty,
@@ -912,6 +924,7 @@ class ComponentReflectionTest(ComparesTables, OneConnectionTablesTest):
                     "d2",
                     comment=r"""Comment types type speedily ' " \ '' Fun!""",
                 ),
+                col("d3", comment="Comment\nwith\rescapes"),
             ],
             (schema, "no_constraints"): [col("data")],
             (schema, "local_table"): [pk("id"), col("data"), col("remote_id")],
@@ -1100,6 +1113,10 @@ class ComponentReflectionTest(ComparesTables, OneConnectionTablesTest):
         ):
             fk_req = testing.requires.foreign_keys_reflect_as_index
             dup_req = testing.requires.unique_constraints_reflect_as_index
+            sorting_expression = (
+                testing.requires.reflect_indexes_with_ascdesc_as_expression
+            )
+
             if (fk and not fk_req.enabled) or (
                 duplicates and not dup_req.enabled
             ):
@@ -1112,7 +1129,13 @@ class ComponentReflectionTest(ComparesTables, OneConnectionTablesTest):
                 "include_columns": [],
             }
             if column_sorting:
-                res["column_sorting"] = {"q": ("desc",)}
+                res["column_sorting"] = column_sorting
+                if sorting_expression.enabled:
+                    res["expressions"] = orig = res["column_names"]
+                    res["column_names"] = [
+                        None if c in column_sorting else c for c in orig
+                    ]
+
             if duplicates:
                 res["duplicates_constraint"] = name
             return [res]
@@ -1406,7 +1429,6 @@ class ComponentReflectionTest(ComparesTables, OneConnectionTablesTest):
         (True, testing.requires.schemas), False, argnames="use_schema"
     )
     def test_get_table_names(self, connection, order_by, use_schema):
-
         if use_schema:
             schema = config.test_schema
         else:
@@ -1516,7 +1538,6 @@ class ComponentReflectionTest(ComparesTables, OneConnectionTablesTest):
         argnames="use_views,use_schema",
     )
     def test_get_columns(self, connection, use_views, use_schema):
-
         if use_schema:
             schema = config.test_schema
         else:
@@ -1583,7 +1604,6 @@ class ComponentReflectionTest(ComparesTables, OneConnectionTablesTest):
 
     @testing.requires.temp_table_reflection
     def test_reflect_table_temp_table(self, connection):
-
         table_name = self.temp_table_name()
         user_tmp = self.tables[table_name]
 
@@ -1731,7 +1751,6 @@ class ComponentReflectionTest(ComparesTables, OneConnectionTablesTest):
     )
     @testing.requires.index_reflection
     def test_get_indexes(self, connection, use_schema):
-
         if use_schema:
             schema = config.test_schema
         else:
@@ -2056,6 +2075,15 @@ class ComponentReflectionTest(ComparesTables, OneConnectionTablesTest):
             insp.clear_cache()
             eq_(insp.get_multi_table_comment(**kw), exp)
 
+    def _check_expressions(self, result, exp, err_msg):
+        def _clean(text: str):
+            return re.sub(r"['\" ]", "", text).lower()
+
+        if isinstance(exp, dict):
+            eq_({_clean(e): v for e, v in result.items()}, exp, err_msg)
+        else:
+            eq_([_clean(e) for e in result], exp, err_msg)
+
     def _check_list(self, result, exp, req_keys=None, msg=None):
         if req_keys is None:
             eq_(result, exp, msg)
@@ -2064,7 +2092,11 @@ class ComponentReflectionTest(ComparesTables, OneConnectionTablesTest):
             for r, e in zip(result, exp):
                 for k in set(r) | set(e):
                     if k in req_keys or (k in r and k in e):
-                        eq_(r[k], e[k], f"{msg} - {k} - {r}")
+                        err_msg = f"{msg} - {k} - {r}"
+                        if k in ("expressions", "column_sorting"):
+                            self._check_expressions(r[k], e[k], err_msg)
+                        else:
+                            eq_(r[k], e[k], err_msg)
 
     def _check_table_dict(self, result, exp, req_keys=None, make_lists=False):
         eq_(set(result.keys()), set(exp.keys()))
@@ -2262,6 +2294,44 @@ class ComponentReflectionTest(ComparesTables, OneConnectionTablesTest):
             tables = [f"{schema}.{t}" for t in tables]
         eq_(sorted(m.tables), sorted(tables))
 
+    @testing.requires.comment_reflection
+    def test_comments_unicode(self, connection, metadata):
+        Table(
+            "unicode_comments",
+            metadata,
+            Column("unicode", Integer, comment="é試蛇ẟΩ"),
+            Column("emoji", Integer, comment="☁️✨"),
+            comment="試蛇ẟΩ✨",
+        )
+
+        metadata.create_all(connection)
+
+        insp = inspect(connection)
+        tc = insp.get_table_comment("unicode_comments")
+        eq_(tc, {"text": "試蛇ẟΩ✨"})
+
+        cols = insp.get_columns("unicode_comments")
+        value = {c["name"]: c["comment"] for c in cols}
+        exp = {"unicode": "é試蛇ẟΩ", "emoji": "☁️✨"}
+        eq_(value, exp)
+
+    @testing.requires.comment_reflection_full_unicode
+    def test_comments_unicode_full(self, connection, metadata):
+        Table(
+            "unicode_comments",
+            metadata,
+            Column("emoji", Integer, comment="🐍🧙🝝🧙‍♂️🧙‍♀️"),
+            comment="🎩🁰🝑🤷‍♀️🤷‍♂️",
+        )
+
+        metadata.create_all(connection)
+
+        insp = inspect(connection)
+        tc = insp.get_table_comment("unicode_comments")
+        eq_(tc, {"text": "🎩🁰🝑🤷‍♀️🤷‍♂️"})
+        c = insp.get_columns("unicode_comments")[0]
+        eq_({c["name"]: c["comment"]}, {"emoji": "🐍🧙🝝🧙‍♂️🧙‍♀️"})
+
 
 class TableNoColumnsTest(fixtures.TestBase):
     __requires__ = ("reflect_tables_no_columns",)
@@ -2317,7 +2387,6 @@ class TableNoColumnsTest(fixtures.TestBase):
 
 
 class ComponentReflectionTestExtra(ComparesIndexes, fixtures.TestBase):
-
     __backend__ = True
 
     @testing.combinations(
@@ -2388,7 +2457,8 @@ class ComponentReflectionTestExtra(ComparesIndexes, fixtures.TestBase):
         )
 
         Index("t_idx", func.lower(t.c.x), t.c.z, func.lower(t.c.y))
-
+        long_str = "long string " * 100
+        Index("t_idx_long", func.coalesce(t.c.x, long_str))
         Index("t_idx_2", t.c.x)
 
         metadata.create_all(connection)
@@ -2415,24 +2485,42 @@ class ComponentReflectionTestExtra(ComparesIndexes, fixtures.TestBase):
 
         completeIndex(expected[0])
 
-        class filtering_str(str):
+        class lower_index_str(str):
             def __eq__(self, other):
+                ol = other.lower()
                 # test that lower and x or y are in the string
-                return "lower" in other and ("x" in other or "y" in other)
+                return "lower" in ol and ("x" in ol or "y" in ol)
+
+        class coalesce_index_str(str):
+            def __eq__(self, other):
+                # test that coalesce and the string is in other
+                return "coalesce" in other.lower() and long_str in other
 
         if testing.requires.reflect_indexes_with_expressions.enabled:
             expr_index = {
                 "name": "t_idx",
                 "column_names": [None, "z", None],
                 "expressions": [
-                    filtering_str("lower(x)"),
+                    lower_index_str("lower(x)"),
                     "z",
-                    filtering_str("lower(y)"),
+                    lower_index_str("lower(y)"),
                 ],
                 "unique": False,
             }
             completeIndex(expr_index)
             expected.insert(0, expr_index)
+
+            expr_index_long = {
+                "name": "t_idx_long",
+                "column_names": [None],
+                "expressions": [
+                    coalesce_index_str(f"coalesce(x, '{long_str}')")
+                ],
+                "unique": False,
+            }
+            completeIndex(expr_index_long)
+            expected.append(expr_index_long)
+
             eq_(insp.get_indexes("t"), expected)
             m2 = MetaData()
             t2 = Table("t", m2, autoload_with=connection)
@@ -2649,7 +2737,6 @@ class NormalizedNameTest(fixtures.TablesTest):
         )
 
     def test_reflect_lowercase_forced_tables(self):
-
         m2 = MetaData()
         t2_ref = Table(
             quoted_name("t2", quote=True), m2, autoload_with=config.db

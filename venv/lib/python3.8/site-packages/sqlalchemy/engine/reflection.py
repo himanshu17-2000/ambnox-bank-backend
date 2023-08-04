@@ -229,7 +229,6 @@ class Inspector(inspection.Inspectable["Inspector"]):
     def _construct(
         cls, init: Callable[..., Any], bind: Union[Engine, Connection]
     ) -> Inspector:
-
         if hasattr(bind.dialect, "inspector"):
             cls = bind.dialect.inspector  # type: ignore[attr-defined]
 
@@ -513,8 +512,6 @@ class Inspector(inspection.Inspectable["Inspector"]):
         foreign key constraint names that would require a separate CREATE
         step after-the-fact, based on dependencies between tables.
 
-        .. versionadded:: 1.0.-
-
         :param schema: schema name to query, if not the default schema.
         :param \**kw: Additional keyword argument to pass to the dialect
          specific implementation. See the documentation of the dialect
@@ -630,8 +627,6 @@ class Inspector(inspection.Inspectable["Inspector"]):
          specific implementation. See the documentation of the dialect
          in use for more information.
 
-        .. versionadded:: 1.0.0
-
         """
 
         with self._operation_context() as conn:
@@ -648,8 +643,6 @@ class Inspector(inspection.Inspectable["Inspector"]):
         :param \**kw: Additional keyword argument to pass to the dialect
          specific implementation. See the documentation of the dialect
          in use for more information.
-
-        .. versionadded:: 1.0.0
 
         """
         with self._operation_context() as conn:
@@ -1406,8 +1399,6 @@ class Inspector(inspection.Inspectable["Inspector"]):
         :return: a list of dictionaries, each representing the
          definition of a check constraints.
 
-        .. versionadded:: 1.1.0
-
         .. seealso:: :meth:`Inspector.get_multi_check_constraints`
         """
 
@@ -1633,7 +1624,6 @@ class Inspector(inspection.Inspectable["Inspector"]):
         exclude_columns: Collection[str],
         cols_by_orig_name: Dict[str, sa_schema.Column[Any]],
     ) -> None:
-
         orig_name = col_d["name"]
 
         table.metadata.dispatch.column_reflect(self, table, col_d)
@@ -1903,6 +1893,7 @@ class Inspector(inspection.Inspectable["Inspector"]):
             columns = const_d["column_names"]
             comment = const_d.get("comment")
             duplicates = const_d.get("duplicates_index")
+            dialect_options = const_d.get("dialect_options", {})
             if include_columns and not set(columns).issubset(include_columns):
                 continue
             if duplicates:
@@ -1926,7 +1917,10 @@ class Inspector(inspection.Inspectable["Inspector"]):
                     constrained_cols.append(constrained_col)
             table.append_constraint(
                 sa_schema.UniqueConstraint(
-                    *constrained_cols, name=conname, comment=comment
+                    *constrained_cols,
+                    name=conname,
+                    comment=comment,
+                    **dialect_options,
                 )
             )
 

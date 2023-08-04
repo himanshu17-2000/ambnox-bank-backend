@@ -190,7 +190,6 @@ class AsyncAdapt_aiosqlite_connection(AdaptedConnection):
 
     @isolation_level.setter
     def isolation_level(self, value):
-
         # aiosqlite's isolation_level setter works outside the Thread
         # that it's supposed to, necessitating setting check_same_thread=False.
         # for improved stability, we instead invent our own awaitable version
@@ -239,6 +238,16 @@ class AsyncAdapt_aiosqlite_connection(AdaptedConnection):
     def close(self):
         try:
             self.await_(self._connection.close())
+        except ValueError:
+            # this is undocumented for aiosqlite, that ValueError
+            # was raised if .close() was called more than once, which is
+            # both not customary for DBAPI and is also not a DBAPI.Error
+            # exception. This is now fixed in aiosqlite via my PR
+            # https://github.com/omnilib/aiosqlite/pull/238, so we can be
+            # assured this will not become some other kind of exception,
+            # since it doesn't raise anymore.
+
+            pass
         except Exception as error:
             self._handle_exception(error)
 
@@ -289,10 +298,13 @@ class AsyncAdapt_aiosqlite_dbapi:
     def connect(self, *arg, **kw):
         async_fallback = kw.pop("async_fallback", False)
 
-        connection = self.aiosqlite.connect(*arg, **kw)
-
-        # it's a Thread.   you'll thank us later
-        connection.daemon = True
+        creator_fn = kw.pop("async_creator_fn", None)
+        if creator_fn:
+            connection = creator_fn(*arg, **kw)
+        else:
+            connection = self.aiosqlite.connect(*arg, **kw)
+            # it's a Thread.   you'll thank us later
+            connection.daemon = True
 
         if util.asbool(async_fallback):
             return AsyncAdaptFallback_aiosqlite_connection(

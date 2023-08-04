@@ -69,6 +69,7 @@ _VT = TypeVar("_VT", bound=Any)
 _T_co = TypeVar("_T_co", covariant=True)
 
 EMPTY_SET: FrozenSet[Any] = frozenset()
+NONE_SET: FrozenSet[Any] = frozenset([None])
 
 
 def merge_lists_w_ordering(a: List[Any], b: List[Any]) -> List[Any]:
@@ -143,7 +144,7 @@ class FacadeDict(ImmutableDictBase[_KT, _VT]):
     """A dictionary that is not publicly mutable."""
 
     def __new__(cls, *args: Any) -> FacadeDict[Any, Any]:
-        new = dict.__new__(cls)
+        new = ImmutableDictBase.__new__(cls)
         return new
 
     def copy(self) -> NoReturn:

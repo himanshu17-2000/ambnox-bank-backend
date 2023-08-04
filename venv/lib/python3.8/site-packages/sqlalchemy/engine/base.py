@@ -358,7 +358,7 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
                 :ref:`dbapi_autocommit`
 
                 :meth:`_engine.Connection.get_isolation_level`
-                - view current level
+                - view current actual level
 
         :param no_parameters: Available on: :class:`_engine.Connection`,
           :class:`_sql.Executable`.
@@ -484,8 +484,6 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
           are compiled into strings; the resulting schema name will be
           converted based on presence in the map of the original name.
 
-          .. versionadded:: 1.1
-
           .. seealso::
 
             :ref:`schema_translating`
@@ -581,24 +579,29 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
             return self._dbapi_connection
 
     def get_isolation_level(self) -> IsolationLevel:
-        """Return the current isolation level assigned to this
-        :class:`_engine.Connection`.
+        """Return the current **actual** isolation level that's present on
+        the database within the scope of this connection.
 
-        This will typically be the default isolation level as determined
-        by the dialect, unless if the
-        :paramref:`.Connection.execution_options.isolation_level`
-        feature has been used to alter the isolation level on a
-        per-:class:`_engine.Connection` basis.
+        This attribute will perform a live SQL operation against the database
+        in order to procure the current isolation level, so the value returned
+        is the actual level on the underlying DBAPI connection regardless of
+        how this state was set. This will be one of the four actual isolation
+        modes ``READ UNCOMMITTED``, ``READ COMMITTED``, ``REPEATABLE READ``,
+        ``SERIALIZABLE``. It will **not** include the ``AUTOCOMMIT`` isolation
+        level setting. Third party dialects may also feature additional
+        isolation level settings.
 
-        This attribute will typically perform a live SQL operation in order
-        to procure the current isolation level, so the value returned is the
-        actual level on the underlying DBAPI connection regardless of how
-        this state was set.  Compare to the
-        :attr:`_engine.Connection.default_isolation_level` accessor
-        which returns the dialect-level setting without performing a SQL
-        query.
+        .. note::  This method **will not report** on the ``AUTOCOMMIT``
+          isolation level, which is a separate :term:`dbapi` setting that's
+          independent of **actual** isolation level.  When ``AUTOCOMMIT`` is
+          in use, the database connection still has a "traditional" isolation
+          mode in effect, that is typically one of the four values
+          ``READ UNCOMMITTED``, ``READ COMMITTED``, ``REPEATABLE READ``,
+          ``SERIALIZABLE``.
 
-        .. versionadded:: 0.9.9
+        Compare to the :attr:`_engine.Connection.default_isolation_level`
+        accessor which returns the isolation level that is present on the
+        database at initial connection time.
 
         .. seealso::
 
@@ -621,27 +624,23 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
 
     @property
     def default_isolation_level(self) -> Optional[IsolationLevel]:
-        """The default isolation level assigned to this
-        :class:`_engine.Connection`.
+        """The initial-connection time isolation level associated with the
+        :class:`_engine.Dialect` in use.
 
-        This is the isolation level setting that the
-        :class:`_engine.Connection`
-        has when first procured via the :meth:`_engine.Engine.connect` method.
-        This level stays in place until the
-        :paramref:`.Connection.execution_options.isolation_level` is used
-        to change the setting on a per-:class:`_engine.Connection` basis.
+        This value is independent of the
+        :paramref:`.Connection.execution_options.isolation_level` and
+        :paramref:`.Engine.execution_options.isolation_level` execution
+        options, and is determined by the :class:`_engine.Dialect` when the
+        first connection is created, by performing a SQL query against the
+        database for the current isolation level before any additional commands
+        have been emitted.
 
-        Unlike :meth:`_engine.Connection.get_isolation_level`,
-        this attribute is set
-        ahead of time from the first connection procured by the dialect,
-        so SQL query is not invoked when this accessor is called.
-
-        .. versionadded:: 0.9.9
+        Calling this accessor does not invoke any new SQL queries.
 
         .. seealso::
 
             :meth:`_engine.Connection.get_isolation_level`
-            - view current level
+            - view current actual isolation level
 
             :paramref:`_sa.create_engine.isolation_level`
             - set per :class:`_engine.Engine` isolation level
@@ -1118,7 +1117,6 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
                 self._handle_dbapi_exception(e, None, None, None, None)
 
     def _commit_impl(self) -> None:
-
         if self._has_events or self.engine._has_events:
             self.dispatch.commit(self)
 
@@ -1306,7 +1304,7 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
     def scalars(
         self,
         statement: TypedReturnsRows[Tuple[_T]],
-        parameters: Optional[_CoreSingleExecuteParams] = None,
+        parameters: Optional[_CoreAnyExecuteParams] = None,
         *,
         execution_options: Optional[CoreExecuteOptionsParameter] = None,
     ) -> ScalarResult[_T]:
@@ -1316,7 +1314,7 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
     def scalars(
         self,
         statement: Executable,
-        parameters: Optional[_CoreSingleExecuteParams] = None,
+        parameters: Optional[_CoreAnyExecuteParams] = None,
         *,
         execution_options: Optional[CoreExecuteOptionsParameter] = None,
     ) -> ScalarResult[Any]:
@@ -1325,7 +1323,7 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
     def scalars(
         self,
         statement: Executable,
-        parameters: Optional[_CoreSingleExecuteParams] = None,
+        parameters: Optional[_CoreAnyExecuteParams] = None,
         *,
         execution_options: Optional[CoreExecuteOptionsParameter] = None,
     ) -> ScalarResult[Any]:
@@ -1553,7 +1551,6 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
         _CoreMultiExecuteParams,
         _CoreSingleExecuteParams,
     ]:
-
         event_multiparams: _CoreMultiExecuteParams
         event_params: _CoreSingleExecuteParams
 
@@ -1714,8 +1711,11 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
         parameters: Optional[_DBAPIAnyExecuteParams] = None,
         execution_options: Optional[CoreExecuteOptionsParameter] = None,
     ) -> CursorResult[Any]:
-        r"""Executes a SQL statement construct and returns a
-        :class:`_engine.CursorResult`.
+        r"""Executes a string SQL statement on the DBAPI cursor directly,
+        without any SQL compilation steps.
+
+        This can be used to pass any string directly to the
+        ``cursor.execute()`` method of the DBAPI in use.
 
         :param statement: The statement str to be executed.   Bound parameters
          must use the underlying DBAPI's paramstyle, such as "qmark",
@@ -1725,6 +1725,8 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
          execution.  The format is one of:   a dictionary of named parameters,
          a tuple of positional parameters, or a list containing either
          dictionaries or tuples for multiple-execute support.
+
+        :return: a :class:`_engine.CursorResult`.
 
          E.g. multiple dictionaries::
 
@@ -1892,7 +1894,6 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
                 )
 
         if self._echo:
-
             self._log_info(str_statement)
 
             stats = context._get_cache_stats()
@@ -2021,33 +2022,32 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
 
         if self._echo:
             stats = context._get_cache_stats() + " (insertmanyvalues)"
-        for (
-            sub_stmt,
-            sub_params,
-            setinputsizes,
-            batchnum,
-            totalbatches,
-        ) in dialect._deliver_insertmanyvalues_batches(
+
+        for imv_batch in dialect._deliver_insertmanyvalues_batches(
             cursor,
             str_statement,
             effective_parameters,
             generic_setinputsizes,
             context,
         ):
-
-            if setinputsizes:
+            if imv_batch.processed_setinputsizes:
                 try:
                     dialect.do_set_input_sizes(
-                        context.cursor, setinputsizes, context
+                        context.cursor,
+                        imv_batch.processed_setinputsizes,
+                        context,
                     )
                 except BaseException as e:
                     self._handle_dbapi_exception(
                         e,
-                        sql_util._long_statement(sub_stmt),
-                        sub_params,
+                        sql_util._long_statement(imv_batch.replaced_statement),
+                        imv_batch.replaced_parameters,
                         None,
                         context,
                     )
+
+            sub_stmt = imv_batch.replaced_statement
+            sub_params = imv_batch.replaced_parameters
 
             if engine_events:
                 for fn in self.dispatch.before_cursor_execute:
@@ -2061,14 +2061,22 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
                     )
 
             if self._echo:
-
                 self._log_info(sql_util._long_statement(sub_stmt))
 
-                if batchnum > 1:
-                    stats = (
-                        f"insertmanyvalues batch {batchnum} "
-                        f"of {totalbatches}"
-                    )
+                imv_stats = f""" {
+                            imv_batch.batchnum}/{imv_batch.total_batches} ({
+                            'ordered'
+                            if imv_batch.rows_sorted else 'unordered'
+                        }{
+                            '; batch not supported'
+                            if imv_batch.is_downgraded
+                            else ''
+                        })"""
+
+                if imv_batch.batchnum == 1:
+                    stats += imv_stats
+                else:
+                    stats = f"insertmanyvalues{imv_stats}"
 
                 if not self.engine.hide_parameters:
                     self._log_info(
@@ -2097,7 +2105,12 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
                     ):
                         break
                 else:
-                    dialect.do_execute(cursor, sub_stmt, sub_params, context)
+                    dialect.do_execute(
+                        cursor,
+                        sub_stmt,
+                        sub_params,
+                        context,
+                    )
 
             except BaseException as e:
                 self._handle_dbapi_exception(
@@ -2275,6 +2288,7 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
                     context,
                     self._is_disconnect,
                     invalidate_pool_on_disconnect,
+                    False,
                 )
 
                 for fn in self.dialect.dispatch.handle_error:
@@ -2345,6 +2359,7 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
         engine: Optional[Engine] = None,
         is_disconnect: Optional[bool] = None,
         invalidate_pool_on_disconnect: bool = True,
+        is_pre_ping: bool = False,
     ) -> NoReturn:
         exc_info = sys.exc_info()
 
@@ -2385,6 +2400,7 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
                 None,
                 is_disconnect,
                 invalidate_pool_on_disconnect,
+                is_pre_ping,
             )
             for fn in dialect.dispatch.handle_error:
                 try:
@@ -2443,6 +2459,7 @@ class ExceptionContextImpl(ExceptionContext):
         "execution_context",
         "is_disconnect",
         "invalidate_pool_on_disconnect",
+        "is_pre_ping",
     )
 
     def __init__(
@@ -2458,6 +2475,7 @@ class ExceptionContextImpl(ExceptionContext):
         context: Optional[ExecutionContext],
         is_disconnect: bool,
         invalidate_pool_on_disconnect: bool,
+        is_pre_ping: bool,
     ):
         self.engine = engine
         self.dialect = dialect
@@ -2469,6 +2487,7 @@ class ExceptionContextImpl(ExceptionContext):
         self.parameters = parameters
         self.is_disconnect = is_disconnect
         self.invalidate_pool_on_disconnect = invalidate_pool_on_disconnect
+        self.is_pre_ping = is_pre_ping
 
 
 class Transaction(TransactionalContext):
