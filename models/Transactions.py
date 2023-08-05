@@ -9,3 +9,5 @@ class Transactions(db.Model):
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     def __repr__(self):
         return f"<Transaction {self.id}>"
+    
+ 

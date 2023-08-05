@@ -8,3 +8,5 @@ class Users(db.Model):
     amount = db.Column(db.Integer , default = 0)
     def __repr__(self):
         return f"<User {self.name}>"
+    
+ 
